@@ -4,10 +4,10 @@
 # ollyr - 20230116
 #
 #
-'''USAGE: creates or modifies a local macos filevault prk 
+''' USAGE: creates or modifies a local macos filevault prk 
 (personal recovery key) store git repo using gnupg encryption keys.'''
 
-'''NOTES: the jamf api filvevault endpoint does not include serial 
+''' NOTES: the jamf api filvevault endpoint does not include serial 
 numbers in the response payload, only jamf ids. we need to iterate 
 each jamf id to get a matching serial number.'''
 
@@ -22,7 +22,7 @@ from pathlib import Path
 home = str(Path.home())
 today = date.today()
 
-'''OPTIONS:'''
+''' OPTIONS: '''
 # override existing prk value in key store
 override = True
 # limit prks to return (paging limit ~2000, jamf version 10.43.1-t1674743888)
