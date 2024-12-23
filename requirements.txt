@@ -1,0 +1,14 @@
+certifi==2024.12.14
+charset-normalizer==3.4.0
+click==8.1.8
+gitdb==4.0.11
+GitPython==3.1.43
+idna==3.10
+jamf-api-auth==1.1.0
+jps_api_wrapper==1.17.0
+passpy==1.0.2
+pyperclip==1.9.0
+python-gnupg==0.5.3
+requests==2.32.3
+smmap==5.0.1
+urllib3==2.3.0

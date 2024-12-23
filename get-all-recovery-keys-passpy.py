@@ -1,114 +1,78 @@
 #!/usr/bin/env python3
 # encoding: utf-8
-#
-# ollyr - 20230116
-#
-#
-''' USAGE: creates or modifies a local macos filevault prk 
-(personal recovery key) store git repo using gnupg encryption keys.'''
 
-''' NOTES: the jamf api filvevault endpoint does not include serial 
-numbers in the response payload, only jamf ids. we need to iterate 
-each jamf id to get a matching serial number.'''
-
-import requests
-import json
 import os
+from jps_api_wrapper.pro import Pro
 import passpy
-import gnupg
-from datetime import date
-from pathlib import Path
+from datetime import date, datetime
 
-home = str(Path.home())
-today = date.today()
-
-''' OPTIONS: '''
-# override existing prk value in key store
+# Configuration Options
 override = True
-# limit prks to return (paging limit ~2000, jamf version 10.43.1-t1674743888)
-page_size = 10
-
-# set env variables
-jamf_hostname = os.environ.get("JAMF_API_ENDPOINT")
-user = os.environ.get("JAMF_API_USER_1")
-pd = os.environ.get("JAMF_API_USER_1_PW")
+page_limit = int(os.environ.get("PAGE_LIMIT", 1000))
+jps_url = os.environ["JPS_URL"]
+client_id = os.environ["CLIENT_ID"]
+client_secret = os.environ["CLIENT_SECRET"]
 gpgid = os.environ.get("GPGID")
+prk_store = os.environ.get("PASSWORD_STORE_DIR")
 
-prk_store = f'{home}/.prk-store'
-gpg_bin='/opt/homebrew/bin/gpg'
-
-'''define absolute path for gpg bin and store directory'''
-store = passpy.Store(gpg_bin=gpg_bin, store_dir=prk_store)
-
-'''create pass store if not already established'''
+# Initialize pass store if not already established
+store = passpy.Store(store_dir=prk_store)
 if not os.path.exists(prk_store):
-
     store.init_store(gpgid)
-    store.init_git()
 
-def get_token():
+def fetch_all_items(api_method, **kwargs):
+    """Manually handle pagination for the given API method."""
+    all_items = []
+    page = 0
 
-    token_url = f'{jamf_hostname}/api/v1/auth/token'
-    headers = {'Accept': 'application/json', }
-    response = requests.post(url=token_url, headers=headers, auth=(user, pd))
-    response_json = response.json()
-    print(f'...api token obtained from {jamf_hostname}')
-    return response_json['token']
+    while True:
+        response = api_method(page=page, page_size=page_limit, **kwargs)
+        items = response.get('results', [])
+        all_items.extend(items)
 
+        if len(items) < page_limit:
+            break
 
-def drop_token(api_token):
+        page += 1
 
-    token_drop_url = f'{jamf_hostname}/api/v1/auth/invalidate-token'
-    headers = {'Accept': '*/*', 'Authorization': 'Bearer ' + api_token}
-    response = requests.post(url=token_drop_url, headers=headers)
+    return all_items
 
-    if response.status_code == 204:
-        print('...api token invalidated.')
-    else:
-        print('...error invalidating api token.')
+def fetch_and_store_recovery_keys():
+    """Fetch recovery keys and serial numbers, then securely store matched pairs."""
+    start_time = datetime.now()
 
-def get_device_attributes():
+    with Pro(jps_url, client_id, client_secret, client=True) as pro:
+        # Fetch all recovery keys and associated Jamf computer IDs
+        recovery_keys_data = fetch_all_items(pro.get_computer_inventory_filevaults)
+        recovery_keys = {
+            item['computerId']: item['personalRecoveryKey']
+            for item in recovery_keys_data
+        }
 
-    count = 0
-    api_token = get_token()
-    headers = {'Accept': 'application/json', 'Authorization': 'Bearer ' + api_token}
-    all_recoverys_keys = f'{jamf_hostname}/api/v1/computers-inventory/filevault?page=0&page-size={page_size}'
-    rk_response = requests.get(all_recoverys_keys, headers=headers)
+        # Fetch all serial numbers and associated Jamf computer IDs
+        serial_numbers_data = fetch_all_items(pro.get_computer_inventories, section="HARDWARE")
+        serial_numbers = {
+            item['id']: item['hardware']['serialNumber']
+            for item in serial_numbers_data
+        }
 
-    if rk_response.status_code == 200:
-        '''create dict from json response'''
-        data = json.loads(rk_response.content.decode('utf-8'))
+        # Match recovery keys with serial numbers and store them
+        prk_count = 0
+        for jamf_id, recovery_key in recovery_keys.items():
+            serial_number = serial_numbers.get(jamf_id)
+            if serial_number and recovery_key:
+                # Store encrypted recovery key with date-stamped directory tree
+                key_path = f"{date.today()}/{serial_number}"
+                store.set_key(key_path, recovery_key, force=override)
+                prk_count += 1
 
-        '''loop response and lookup serial numbers individually'''
-        for item in data['results']:
-            jamf_id = item['computerId']
-            recovery_key = item['personalRecoveryKey']
-            serial_number_endpoint = f'{jamf_hostname}/api/v1/computers-inventory/{jamf_id}?section=HARDWARE'
-            sn_response = requests.get(serial_number_endpoint, headers=headers)
-    
-            if sn_response.status_code == 200:
-                count += 1
-                '''create dict from json response'''
-                sn_data = json.loads(sn_response.content.decode('utf-8'))
-                serial_number = sn_data['hardware']['serialNumber']
+        print(f"Recovery key(s) found and stored: {prk_count}")
 
-                '''store encrypted recovery keys in pass store with device sn and day-stamped directory tree'''
-                store.set_key(str(today)+"/"+serial_number, recovery_key,force=override)
-
-            else:
-                print('...error:', sn_response.content.decode('utf-8'))
-            
-    else:
-        print('...error:', rk_response.content.decode('utf-8'))
-
-    print(f'recovery key(s) found = {count}')
-
-    drop_token(api_token)
-
+    duration = datetime.now() - start_time
+    print(f"Duration: {duration.total_seconds():.2f} seconds.")
 
 def main():
-    
-    get_device_attributes()
-    
-if __name__ == '__main__':
+    fetch_and_store_recovery_keys()
+
+if __name__ == "__main__":
     main()
